@@ -108,25 +108,5 @@ temp/
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 
-# Training artifacts and datasets
-training/
-video_landmarks_*.json
-*.keras
-*.h5
-*.onnx
-
-# Allow model files in public folders for deployment
-!**/public/**/*.keras
-!**/public/**/*.h5
-!**/public/**/*.onnx
-!**/public/**/*.json
-
-# Python virtual environments
-venv/
-.venv/
-env/
-__pycache__/
-*.pyc
-
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
