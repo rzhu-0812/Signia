@@ -115,6 +115,12 @@ video_landmarks_*.json
 *.h5
 *.onnx
 
+# Allow model files in public folders for deployment
+!**/public/**/*.keras
+!**/public/**/*.h5
+!**/public/**/*.onnx
+!**/public/**/*.json
+
 # Python virtual environments
 venv/
 .venv/
