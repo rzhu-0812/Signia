@@ -19,7 +19,6 @@ interface OutputPanelProps {
   isCorrecting: boolean;
   onDeleteLast: () => void;
   onClear: () => void;
-  onTranslateNow: () => void;
 }
 
 export function OutputPanel({
@@ -28,7 +27,6 @@ export function OutputPanel({
   isCorrecting,
   onDeleteLast,
   onClear,
-  onTranslateNow,
 }: OutputPanelProps) {
   const [fadeIn, setFadeIn] = useState(false);
   const prevCorrectedRef = useRef("");
@@ -91,18 +89,6 @@ export function OutputPanel({
           )}
         </div>
       </div>
-
-      {/* Manual translate button */}
-      {rawChars.length > 0 && !isCorrecting && (
-        <button
-          onClick={onTranslateNow}
-          className="w-full px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 flex items-center justify-center gap-2"
-          aria-label="Translate now"
-        >
-          Translate now
-          <ArrowRight size={14} />
-        </button>
-      )}
 
       {/* Corrected text */}
       <div className="flex flex-col gap-2">

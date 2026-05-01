@@ -1,78 +1,54 @@
 /**
  * useCharBuffer.ts
- * Design: Warm Paper Studio — hook, no UI concerns.
- *
- * Accumulates emitted letters and triggers autocorrect after:
- *   - 2 seconds of silence, OR
- *   - User manually clicks "Translate now"
- *
- * Uses Google Flan-T5 via HuggingFace free API in production.
- * On localhost, HuggingFace blocks CORS so autocorrect falls back
- * to simple lowercase — works fine for local testing.
+ * Uses Google Gemini Flash — free tier, 1500 requests/day, no credit card.
+ * Get key at aistudio.google.com
+ * Add VITE_GEMINI_API_KEY to .env.local
  */
 
+import { Groq } from 'groq-sdk';
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const SILENCE_MS = 2000;
+const SILENCE_MS = 600;
+const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
 
-const HF_API_URL =
-  "https://api-inference.huggingface.co/models/google/flan-t5-large";
+const groq = new Groq({ 
+  apiKey: GROQ_KEY,
+  dangerouslyAllowBrowser: true
+});
 
-const HF_TOKEN = import.meta.env.VITE_HF_TOKEN ?? "";
-
-// HuggingFace blocks CORS from localhost — only call in production
-const IS_PROD = !window.location.hostname.includes("localhost") &&
-  !window.location.hostname.includes("127.0.0.1");
-
-async function callAutocorrect(chars: string): Promise<string> {
-  // On localhost just return lowercased — HF blocks CORS from localhost
-  if (!IS_PROD) {
-    return chars.toLowerCase();
+async function callAutocorrect(chars: string, onChunk: (text: string) => void): Promise<void> {
+  if (!GROQ_KEY) {
+    console.warn("No VITE_GROQ_API_KEY set — showing raw chars");
+    onChunk(chars.toLowerCase());
+    return;
   }
 
-  const prompt = `Add spaces between words and fix spelling in this ASL fingerspelling output: ${chars.trim()}. Output only the corrected lowercase text.`;
-
   try {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-    if (HF_TOKEN) {
-      headers["Authorization"] = `Bearer ${HF_TOKEN}`;
-    }
-
-    const res = await fetch(HF_API_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 80,
-          temperature: 0.1,
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: "You correct ASL fingerspelling output. Input is raw uppercase letters with no spaces. Common misreads: A/E/S, U/V, M/N. Add word boundaries and fix obvious errors. Output ONLY the corrected lowercase text. Nothing else."
         },
-      }),
+        {
+          role: "user",
+          content: chars.trim()
+        }
+      ],
+      model: "llama-3.1-8b-instant",
+      temperature: 0.1,
+      max_tokens: 150,
+      top_p: 1,
+      stream: true,
+      stop: null,
     });
 
-    if (res.status === 503) {
-      console.warn("HF model warming up");
-      return chars.toLowerCase();
+    for await (const chunk of chatCompletion) {
+      onChunk(chunk.choices[0]?.delta?.content || '');
     }
-
-    if (!res.ok) {
-      console.warn("HF API error:", res.status);
-      return chars.toLowerCase();
-    }
-
-    const data = await res.json();
-
-    const generated: string = Array.isArray(data)
-      ? (data[0]?.generated_text ?? "")
-      : (data?.generated_text ?? "");
-
-    const cleaned = generated.trim().toLowerCase();
-    return cleaned || chars.toLowerCase();
-  } catch (err) {
-    console.warn("Autocorrect failed:", err);
-    return chars.toLowerCase();
+  } catch (err: any) {
+    console.warn("Groq API error:", err);
+    onChunk(chars.toLowerCase());
   }
 }
 
@@ -99,12 +75,14 @@ export function useCharBuffer(): UseCharBufferReturn {
     if (!chars.trim() || pendingRef.current) return;
     pendingRef.current = true;
     setIsCorrecting(true);
-
+    setCorrectedText(""); // Clear text before streaming
+    
     try {
-      const corrected = await callAutocorrect(chars);
-      setCorrectedText(corrected);
-    } catch {
-      setCorrectedText(chars.toLowerCase());
+      let fullText = "";
+      await callAutocorrect(chars, (chunk) => {
+        fullText += chunk;
+        setCorrectedText(fullText.toLowerCase());
+      });
     } finally {
       pendingRef.current = false;
       setIsCorrecting(false);
@@ -167,9 +145,7 @@ export function useCharBuffer(): UseCharBufferReturn {
   }, [clearSilenceTimer, triggerAutocorrect]);
 
   useEffect(() => {
-    return () => {
-      clearSilenceTimer();
-    };
+    return () => { clearSilenceTimer(); };
   }, [clearSilenceTimer]);
 
   return {

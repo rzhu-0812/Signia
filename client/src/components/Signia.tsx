@@ -124,7 +124,6 @@ export function Signia() {
                 isCorrecting={isCorrecting}
                 onDeleteLast={deleteLastChar}
                 onClear={clearAll}
-                onTranslateNow={manualTrigger}
               />
             </section>
           </div>
