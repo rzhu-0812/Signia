@@ -10,8 +10,8 @@
 
 "use client";
 
-import { useRef } from "react";
-import { Hand } from "lucide-react";
+import { useRef, useState } from "react";
+import { Hand, SwitchCamera } from "lucide-react";
 import { useMediaPipe, type MediaPipeStatus } from "@/hooks/useMediaPipe";
 import type { Landmark } from "@/lib/normalize";
 
@@ -28,6 +28,7 @@ export function WebcamPanel({
 }: WebcamPanelProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
 
   const { status } = useMediaPipe({
     videoRef,
@@ -35,6 +36,7 @@ export function WebcamPanel({
     onLandmarks,
     onNoHand,
     drawLandmarks: true,
+    facingMode,
   });
 
   const containerClass =
@@ -102,17 +104,28 @@ export function WebcamPanel({
         )}
       </div>
 
-      {/* Status pill */}
-      <div className="flex items-center gap-2">
-        <span
-          className={[
-            "inline-block w-2 h-2 rounded-full",
-            status === "ready" ? "bg-teal-500 animate-pulse" : "bg-stone-300",
-          ].join(" ")}
-        />
-        <span className="text-xs text-stone-400 font-medium tracking-wide uppercase">
-          {statusLabel(status)}
-        </span>
+      {/* Controls / Status */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className={[
+              "inline-block w-2 h-2 rounded-full",
+              status === "ready" ? "bg-teal-500 animate-pulse" : "bg-stone-300",
+            ].join(" ")}
+          />
+          <span className="text-xs text-stone-400 font-medium tracking-wide uppercase">
+            {statusLabel(status)}
+          </span>
+        </div>
+
+        <button
+          onClick={() => setFacingMode((prev) => (prev === "user" ? "environment" : "user"))}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+          aria-label="Flip camera"
+        >
+          <SwitchCamera size={14} />
+          {facingMode === "user" ? "Front" : "Rear"} Camera
+        </button>
       </div>
     </div>
   );

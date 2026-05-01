@@ -48,6 +48,7 @@ declare global {
         onFrame: () => Promise<void>;
         width?: number;
         height?: number;
+        facingMode?: "user" | "environment";
       }
     ) => MPCamera;
     drawConnectors: (
@@ -80,6 +81,7 @@ export interface UseMediaPipeOptions {
   onLandmarks: (landmarks: Landmark[], handedness: string) => void;
   onNoHand: () => void;
   drawLandmarks?: boolean;
+  facingMode?: "user" | "environment";
 }
 
 export function useMediaPipe({
@@ -88,6 +90,7 @@ export function useMediaPipe({
   onLandmarks,
   onNoHand,
   drawLandmarks = true,
+  facingMode = "user",
 }: UseMediaPipeOptions) {
   const [status, setStatus] = useState<MediaPipeStatus>("idle");
   const handsRef = useRef<MPHands | null>(null);
@@ -134,13 +137,15 @@ export function useMediaPipe({
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        // Mirror the canvas to match the mirrored video
+        // Mirror the canvas if facing user
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
 
         ctx.save();
-        ctx.scale(-1, 1);
-        ctx.translate(-canvas.width, 0);
+        if (facingMode === "user") {
+          ctx.scale(-1, 1);
+          ctx.translate(-canvas.width, 0);
+        }
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
         ctx.restore();
 
@@ -151,10 +156,12 @@ export function useMediaPipe({
           const lms = results.multiHandLandmarks[0];
 
           if (drawLandmarks && window.drawConnectors && window.drawLandmarks) {
-            // Draw on mirrored canvas
+            // Draw on canvas, applying mirror if needed
             ctx.save();
-            ctx.scale(-1, 1);
-            ctx.translate(-canvas.width, 0);
+            if (facingMode === "user") {
+              ctx.scale(-1, 1);
+              ctx.translate(-canvas.width, 0);
+            }
             window.drawConnectors(ctx, lms, window.HAND_CONNECTIONS, {
               color: "#14b8a6",
               lineWidth: 2,
@@ -198,6 +205,7 @@ export function useMediaPipe({
         },
         width: 1280,
         height: 720,
+        facingMode,
       });
 
       await camera.start();
@@ -207,7 +215,7 @@ export function useMediaPipe({
       console.error("MediaPipe init error:", err);
       setStatus("error");
     }
-  }, [videoRef, canvasRef, drawLandmarks]);
+  }, [videoRef, canvasRef, drawLandmarks, facingMode]);
 
   const stop = useCallback(() => {
     cameraRef.current?.stop();
