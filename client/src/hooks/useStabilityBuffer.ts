@@ -2,25 +2,23 @@
  * useStabilityBuffer.ts
  * Design: Warm Paper Studio — hook, no UI concerns.
  *
- * Debounces the raw per-frame classifier output into stable letter emissions.
+ * Debounces raw per-frame classifier output into stable letter emissions.
  *
- * Rules:
- *   holdFrames=8    — emit a letter only after 8 consecutive frames agree
- *   cooldownFrames=15 — ignore new predictions for 15 frames after emission
- *   minConfidence=0.6 — discard predictions below this threshold
- *
- * Returns:
- *   emittedLetter — the most recently emitted letter (null if none yet)
- *   onPrediction  — call this with every frame's prediction
- *   reset         — clear all state
+ * Fix for open-palm "B" spam:
+ *   - Require top prediction to beat #2 by MIN_GAP (15%)
+ *   - If top and #2 are close, hand pose is ambiguous — don't emit
+ *   - holdFrames=5: need 5 consecutive clear frames
+ *   - cooldownFrames=20: ~0.67s gap between letters at 30fps
+ *   - minConfidence=0.65: reasonable threshold
  */
 
 import { useCallback, useRef, useState } from "react";
 import type { Prediction } from "./useClassifier";
 
-const HOLD_FRAMES = 8;
-const COOLDOWN_FRAMES = 15;
-const MIN_CONFIDENCE = 0.6;
+const HOLD_FRAMES = 5;
+const COOLDOWN_FRAMES = 20;
+const MIN_CONFIDENCE = 0.65;
+const MIN_GAP = 0.15; // top prediction must beat #2 by this margin
 
 export interface UseStabilityBufferReturn {
   emittedLetter: string | null;
@@ -33,7 +31,6 @@ export function useStabilityBuffer(
 ): UseStabilityBufferReturn {
   const [emittedLetter, setEmittedLetter] = useState<string | null>(null);
 
-  // Use refs for frame counters to avoid re-renders on every frame
   const consecutiveRef = useRef(0);
   const cooldownRef = useRef(0);
   const currentLabelRef = useRef<string | null>(null);
@@ -42,17 +39,27 @@ export function useStabilityBuffer(
   onEmitRef.current = onEmit;
 
   const onPrediction = useCallback((prediction: Prediction | null) => {
-    // Decrement cooldown
     if (cooldownRef.current > 0) {
       cooldownRef.current--;
       return;
     }
 
     if (!prediction || prediction.confidence < MIN_CONFIDENCE) {
-      // Reset consecutive counter on low-confidence or null prediction
       consecutiveRef.current = 0;
       currentLabelRef.current = null;
       return;
+    }
+
+    // Check confidence gap — if top and #2 are close, pose is ambiguous
+    const top2 = prediction.top3?.[1];
+    if (top2) {
+      const gap = prediction.confidence - top2.confidence;
+      if (gap < MIN_GAP) {
+        // Too close to call — reset and wait for clearer pose
+        consecutiveRef.current = 0;
+        currentLabelRef.current = null;
+        return;
+      }
     }
 
     const { label } = prediction;
@@ -60,17 +67,13 @@ export function useStabilityBuffer(
     if (label === currentLabelRef.current) {
       consecutiveRef.current++;
     } else {
-      // New label — restart consecutive count
       currentLabelRef.current = label;
       consecutiveRef.current = 1;
     }
 
     if (consecutiveRef.current >= HOLD_FRAMES) {
-      // Emit!
       setEmittedLetter(label);
       onEmitRef.current(label);
-
-      // Reset for next emission
       consecutiveRef.current = 0;
       currentLabelRef.current = null;
       cooldownRef.current = COOLDOWN_FRAMES;

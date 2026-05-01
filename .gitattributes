@@ -1,2 +1,2 @@
-client/public/word_model/weights.json filter=lfs diff=lfs merge=lfs -text
-client/public/model/weights.json filter=lfs diff=lfs merge=lfs -text
+# No Git LFS — Vercel free tier doesn't support LFS
+# Model files are served as regular static assets

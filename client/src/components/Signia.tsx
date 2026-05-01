@@ -140,7 +140,7 @@ export function Signia() {
       <footer className="border-t border-stone-200 bg-gradient-to-r from-stone-50 to-teal-50">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between flex-wrap gap-2">
           <p className="text-xs text-stone-600 font-semibold tracking-tight">
-            © 2026 Signia AI <span className="mx-1 text-stone-300">|</span> 
+            © 2026 Signia <span className="mx-1 text-stone-300">|</span>
             <span className="text-stone-400 font-normal">Advanced Communication Platform</span>
           </p>
           <p className="text-xs text-stone-400">Powered by MediaPipe Hands + custom ML model</p>

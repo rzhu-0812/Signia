@@ -5,16 +5,14 @@
  * - Captures 30-frame sequences of hand + pose + face landmarks
  * - Runs LSTM inference on sequences to predict ~2000 ASL words
  * - Shows top-5 predictions with confidence scores
- * - Full-body skeleton visualization on canvas
+ * - Thumbs up/down feedback stored in Supabase
  */
-
-"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMediaPipeHolistic } from "@/hooks/useMediaPipeHolistic";
 import { useWordClassifier } from "@/hooks/useWordClassifier";
 import { submitVote } from "@/lib/supabase";
-import { ThumbsUp, ThumbsDown, CheckCircle2 } from "lucide-react";
+import { ThumbsUp, ThumbsDown, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface Prediction {
@@ -30,36 +28,32 @@ export function WordDetectionPanel() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [sequenceReady, setSequenceReady] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [voted, setVoted] = useState<boolean | null>(null);
+  const [frameCount, setFrameCount] = useState(0);
 
-  // Accumulate 30-frame sequences
   const sequenceRef = useRef<number[][]>([]);
   const MAX_FRAMES = 30;
 
-  // Load word model
   const { predict: predictWord, status: modelStatus } = useWordClassifier();
 
-  // Handle incoming frame features from Holistic
-  const handleFrameFeatures = useCallback(
-    (features: number[]) => {
-      if (sequenceRef.current.length < MAX_FRAMES) {
-        sequenceRef.current.push(features);
-
-        if (sequenceRef.current.length === MAX_FRAMES) {
-          setSequenceReady(true);
-        }
+  const handleFrameFeatures = useCallback((features: number[]) => {
+    if (sequenceRef.current.length < MAX_FRAMES) {
+      sequenceRef.current.push(features);
+      setFrameCount(sequenceRef.current.length);
+      if (sequenceRef.current.length === MAX_FRAMES) {
+        setSequenceReady(true);
       }
-    },
-    []
-  );
-
-  const handleNoBody = useCallback(() => {
-    // Reset sequence if body is lost
-    sequenceRef.current = [];
-    setSequenceReady(false);
-    setPredictions([]);
+    }
   }, []);
 
-  // Initialize Holistic
+  const handleNoBody = useCallback(() => {
+    sequenceRef.current = [];
+    setSequenceReady(false);
+    setFrameCount(0);
+    setPredictions([]);
+    setVoted(null);
+  }, []);
+
   const { status: holisticStatus } = useMediaPipeHolistic({
     videoRef,
     canvasRef,
@@ -76,9 +70,8 @@ export function WordDetectionPanel() {
       setIsProcessing(true);
       try {
         const sequence = sequenceRef.current;
-        const topPredictions = await predictWord(sequence);
+        const topPredictions = predictWord(sequence);
 
-        // Format predictions with confidence
         const formatted: Prediction[] = topPredictions.map((pred, idx) => ({
           word: pred.word,
           confidence: pred.confidence,
@@ -86,13 +79,14 @@ export function WordDetectionPanel() {
         }));
 
         setPredictions(formatted);
-
-        // Reset for next sequence
-        sequenceRef.current = [];
-        setSequenceReady(false);
+        setVoted(null); // Reset vote state for new prediction
       } catch (err) {
         console.error("Word prediction error:", err);
       } finally {
+        // Reset for next sequence
+        sequenceRef.current = [];
+        setFrameCount(0);
+        setSequenceReady(false);
         setIsProcessing(false);
       }
     };
@@ -100,12 +94,32 @@ export function WordDetectionPanel() {
     runInference();
   }, [sequenceReady, isProcessing, modelStatus, predictWord]);
 
+  const handleVote = async (isCorrect: boolean) => {
+    if (voted !== null || predictions.length === 0) return;
+    setVoted(isCorrect);
+    try {
+      await submitVote(predictions[0].word, isCorrect);
+      toast.success(
+        isCorrect ? "Thanks! Marked as correct." : "Feedback recorded — we'll improve!",
+        { icon: <CheckCircle2 className="w-4 h-4 text-teal-500" /> }
+      );
+    } catch {
+      toast.error("Failed to submit feedback");
+      setVoted(null); // Allow retry
+    }
+  };
+
+  const progressPct = Math.round((frameCount / MAX_FRAMES) * 100);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[1fr] lg:grid-cols-[1.2fr_0.8fr] gap-6 lg:gap-8 items-start" aria-label="Word detection panel" role="region">
-      {/* Left: Camera with full-body skeleton */}
+    <div
+      className="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-6 lg:gap-8 items-start"
+      aria-label="Word detection panel"
+      role="region"
+    >
+      {/* ── Left: Camera ─────────────────────────────────────────────────── */}
       <section className="flex flex-col gap-4 w-full">
-        {/* Webcam canvas - tall aspect ratio for full body */}
-        <div className="relative bg-black rounded-3xl overflow-hidden shadow-lg max-h-[80vh] w-full aspect-[4/5]">
+        <div className="relative bg-black rounded-3xl overflow-hidden shadow-lg w-full aspect-[4/5] max-h-[80vh]">
           <video
             ref={videoRef}
             className="absolute inset-0 w-full h-full object-cover opacity-0"
@@ -117,37 +131,67 @@ export function WordDetectionPanel() {
             ref={canvasRef}
             className="absolute inset-0 w-full h-full object-cover"
           />
-          {holisticStatus !== "ready" && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-              <p className="text-white text-sm">{holisticStatus}...</p>
+
+          {/* Loading overlay */}
+          {holisticStatus !== "ready" && holisticStatus !== "no_body" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 gap-3">
+              <Loader2 className="w-6 h-6 text-teal-400 animate-spin" />
+              <p className="text-white text-sm capitalize">{holisticStatus}…</p>
             </div>
           )}
+
+          {/* No body detected */}
+          {holisticStatus === "no_body" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
+              <div className="text-4xl opacity-40">🧍</div>
+              <p className="text-white/60 text-sm">Show your full body</p>
+            </div>
+          )}
+
+          {/* Frame capture progress bar */}
+          {holisticStatus === "ready" && frameCount > 0 && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/20">
+              <div
+                className="h-full bg-teal-400 transition-all duration-100"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          )}
+
+          {/* Status pill */}
+          <div className="absolute bottom-3 left-3">
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium backdrop-blur-sm ${holisticStatus === "ready"
+                  ? "bg-black/40 text-teal-300"
+                  : "bg-black/40 text-white/50"
+                }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${holisticStatus === "ready"
+                    ? "bg-teal-400 animate-pulse"
+                    : "bg-white/30"
+                  }`}
+              />
+              {holisticStatus === "ready" ? "Body detected" : holisticStatus}
+            </span>
+          </div>
         </div>
 
-        {/* Status indicators */}
-        <div className="text-xs text-stone-500 space-y-1 px-2">
-          <p>
-            Holistic:{" "}
-            <span
-              className={
-                holisticStatus === "ready"
-                  ? "text-teal-600 font-medium"
-                  : "text-stone-400"
-              }
-            >
-              {holisticStatus}
-            </span>
-          </p>
-          <p>
-            Sequence: {sequenceRef.current.length}/{MAX_FRAMES}
-            {sequenceReady && <span className="text-teal-600 font-medium"> ✓ Ready</span>}
-          </p>
-        </div>
+        {/* Capture progress text */}
+        <p className="text-xs text-stone-400 px-1">
+          Capturing:{" "}
+          <span className="font-medium text-stone-600">
+            {frameCount}/{MAX_FRAMES} frames
+          </span>
+          {sequenceReady && (
+            <span className="text-teal-600 font-medium"> — analysing…</span>
+          )}
+        </p>
       </section>
 
-      {/* Right: Predictions and info */}
+      {/* ── Right: Predictions ───────────────────────────────────────────── */}
       <section className="flex flex-col gap-4 w-full">
-        {/* Title */}
+        {/* Header */}
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold text-stone-700 uppercase tracking-wider">
             Word Detection
@@ -158,120 +202,132 @@ export function WordDetectionPanel() {
         </div>
 
         {/* Model status */}
-        <div className="text-xs text-stone-500">
-          <p>
-            Model:{" "}
-            <span
-              className={
-                modelStatus === "ready"
-                  ? "text-teal-600 font-medium"
-                  : "text-stone-400"
-              }
-            >
-              {modelStatus}
-            </span>
-          </p>
-        </div>
+        <p className="text-xs text-stone-400">
+          Model:{" "}
+          <span
+            className={
+              modelStatus === "ready"
+                ? "text-teal-600 font-medium"
+                : "text-stone-400"
+            }
+          >
+            {modelStatus}
+          </span>
+        </p>
+
+        {/* Processing indicator */}
+        {isProcessing && (
+          <div className="bg-teal-50 rounded-2xl border border-teal-100 p-4 flex items-center gap-3">
+            <Loader2 className="w-4 h-4 text-teal-500 animate-spin flex-shrink-0" />
+            <p className="text-sm text-teal-700">Analysing sequence…</p>
+          </div>
+        )}
 
         {/* Predictions */}
-        {predictions.length > 0 && (
-          <div className="bg-white rounded-3xl border border-stone-100 shadow-sm p-6 flex flex-col gap-4">
-            <h3 className="text-sm font-semibold text-stone-700">Top Predictions</h3>
+        {predictions.length > 0 && !isProcessing && (
+          <div className="bg-white rounded-3xl border border-stone-100 shadow-sm p-5 flex flex-col gap-4">
+            <h3 className="text-xs font-semibold text-stone-500 uppercase tracking-wider">
+              Top Predictions
+            </h3>
 
             <div className="space-y-3">
               {predictions.map((pred, i) => (
-                <div key={pred.rank} className="flex flex-col gap-2">
+                <div key={pred.rank}>
                   <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-stone-400 w-6">
+                    <span className="text-xs font-bold text-stone-300 w-5 flex-shrink-0">
                       #{pred.rank}
                     </span>
                     <div className="flex-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium text-stone-700">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span
+                          className={`font-medium ${i === 0
+                              ? "text-base text-stone-800"
+                              : "text-sm text-stone-600"
+                            }`}
+                        >
                           {pred.word}
                         </span>
-                        <span className="text-xs text-stone-500">
+                        <span className="text-xs text-stone-400 tabular-nums">
                           {(pred.confidence * 100).toFixed(1)}%
                         </span>
                       </div>
-                      <div className="h-2 bg-stone-100 rounded-full overflow-hidden">
+                      <div className="h-1.5 bg-stone-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-teal-500 transition-all duration-300"
+                          className={`h-full rounded-full transition-all duration-500 ${i === 0 ? "bg-teal-500" : "bg-stone-300"
+                            }`}
                           style={{ width: `${pred.confidence * 100}%` }}
                         />
                       </div>
                     </div>
                   </div>
-
-                  {/* Feedback buttons for the top prediction */}
-                  {i === 0 && (
-                    <div className="flex items-center justify-end gap-3 mt-1 pr-1">
-                      <span className="text-[10px] text-stone-400 font-medium uppercase tracking-wider">
-                        Accurate?
-                      </span>
-                      <button
-                        onClick={async () => {
-                          try {
-                            await submitVote(pred.word, true);
-                            toast.success("Thanks for the feedback!", {
-                              icon: <CheckCircle2 className="w-4 h-4 text-teal-500" />,
-                            });
-                          } catch {
-                            toast.error("Failed to submit feedback");
-                          }
-                        }}
-                        className="p-1.5 rounded-lg bg-stone-50 text-stone-400 hover:text-teal-600 hover:bg-teal-50 transition-colors border border-stone-100"
-                        title="Correct"
-                      >
-                        <ThumbsUp size={14} />
-                      </button>
-                      <button
-                        onClick={async () => {
-                          try {
-                            await submitVote(pred.word, false);
-                            toast.success("Feedback recorded. We'll improve!", {
-                              icon: <CheckCircle2 className="w-4 h-4 text-orange-500" />,
-                            });
-                          } catch {
-                            toast.error("Failed to submit feedback");
-                          }
-                        }}
-                        className="p-1.5 rounded-lg bg-stone-50 text-stone-400 hover:text-orange-600 hover:bg-orange-50 transition-colors border border-stone-100"
-                        title="Incorrect"
-                      >
-                        <ThumbsDown size={14} />
-                      </button>
-                    </div>
-                  )}
                 </div>
               ))}
+            </div>
+
+            {/* Voting — only shows for top prediction */}
+            <div className="border-t border-stone-50 pt-4">
+              {voted === null ? (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-stone-400">
+                    Was "{predictions[0].word}" correct?
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleVote(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 text-xs font-medium hover:bg-teal-100 transition-colors border border-teal-100"
+                    >
+                      <ThumbsUp size={12} />
+                      Yes
+                    </button>
+                    <button
+                      onClick={() => handleVote(false)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-stone-50 text-stone-600 text-xs font-medium hover:bg-stone-100 transition-colors border border-stone-100"
+                    >
+                      <ThumbsDown size={12} />
+                      No
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-stone-400">
+                  <CheckCircle2 size={13} className="text-teal-500" />
+                  Feedback recorded — thank you!
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* No predictions yet */}
-        {predictions.length === 0 && modelStatus === "ready" && (
-          <div className="bg-stone-50 rounded-3xl border border-stone-100 p-6 text-center">
-            <p className="text-sm text-stone-600">
-              {isProcessing
-                ? "Processing sequence..."
-                : "Sign a word to see predictions"}
+        {/* Empty state — model ready but no predictions yet */}
+        {predictions.length === 0 && !isProcessing && modelStatus === "ready" && (
+          <div className="bg-stone-50 rounded-3xl border border-stone-100 p-8 text-center">
+            <div className="text-3xl mb-3">🤟</div>
+            <p className="text-sm text-stone-600 font-medium">Sign a word</p>
+            <p className="text-xs text-stone-400 mt-1">
+              Stand back so your full body is visible
             </p>
           </div>
         )}
 
-        {/* Model loading */}
+        {/* Model not ready */}
         {modelStatus !== "ready" && (
           <div className="bg-stone-50 rounded-3xl border border-stone-100 p-6 text-center">
-            <p className="text-sm text-stone-600">
-              Loading word model ({modelStatus})...
+            <Loader2 className="w-5 h-5 text-stone-300 animate-spin mx-auto mb-2" />
+            <p className="text-sm text-stone-500">
+              {modelStatus === "missing"
+                ? "Word model not deployed yet"
+                : `Loading word model…`}
             </p>
+            {modelStatus === "missing" && (
+              <p className="text-xs text-stone-400 mt-1">
+                Drop trained weights into public/word_model/
+              </p>
+            )}
           </div>
         )}
 
-        {/* Info note */}
-        <p className="text-xs text-stone-400 text-center px-2 leading-relaxed">
-          ✦ Full-body signing • ~2000 words • LSTM model
+        <p className="text-xs text-stone-400 text-center leading-relaxed">
+          ✦ Full-body tracking · ~2000 ASL words · BiLSTM model
         </p>
       </section>
     </div>

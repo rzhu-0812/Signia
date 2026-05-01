@@ -2,28 +2,79 @@
  * useCharBuffer.ts
  * Design: Warm Paper Studio — hook, no UI concerns.
  *
- * Accumulates emitted letters into a raw character stream and triggers
- * the /api/autocorrect endpoint after:
- *   - 2 seconds of silence (no new letter emitted), OR
- *   - User manually clicks "Translate now" button
+ * Accumulates emitted letters and triggers autocorrect after:
+ *   - 2 seconds of silence, OR
+ *   - User manually clicks "Translate now"
  *
- * Raw stream NEVER auto-clears — it only clears when user presses Clear button
- * or sends a message. This allows the user to see their full fingerspelling
- * stream and correct it incrementally.
- *
- * Returns:
- *   rawChars       — the current raw character stream
- *   correctedText  — the latest autocorrected text (empty string if none)
- *   isCorrecting   — true while waiting for the API response
- *   addLetter      — call with each emitted letter
- *   clearAll       — reset everything
- *   deleteLastChar — remove last character
- *   manualTrigger  — manually trigger autocorrect immediately
+ * Uses Google Flan-T5 via HuggingFace free API in production.
+ * On localhost, HuggingFace blocks CORS so autocorrect falls back
+ * to simple lowercase — works fine for local testing.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const SILENCE_MS = 2000;
+
+const HF_API_URL =
+  "https://api-inference.huggingface.co/models/google/flan-t5-large";
+
+const HF_TOKEN = import.meta.env.VITE_HF_TOKEN ?? "";
+
+// HuggingFace blocks CORS from localhost — only call in production
+const IS_PROD = !window.location.hostname.includes("localhost") &&
+  !window.location.hostname.includes("127.0.0.1");
+
+async function callAutocorrect(chars: string): Promise<string> {
+  // On localhost just return lowercased — HF blocks CORS from localhost
+  if (!IS_PROD) {
+    return chars.toLowerCase();
+  }
+
+  const prompt = `Add spaces between words and fix spelling in this ASL fingerspelling output: ${chars.trim()}. Output only the corrected lowercase text.`;
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (HF_TOKEN) {
+      headers["Authorization"] = `Bearer ${HF_TOKEN}`;
+    }
+
+    const res = await fetch(HF_API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 80,
+          temperature: 0.1,
+        },
+      }),
+    });
+
+    if (res.status === 503) {
+      console.warn("HF model warming up");
+      return chars.toLowerCase();
+    }
+
+    if (!res.ok) {
+      console.warn("HF API error:", res.status);
+      return chars.toLowerCase();
+    }
+
+    const data = await res.json();
+
+    const generated: string = Array.isArray(data)
+      ? (data[0]?.generated_text ?? "")
+      : (data?.generated_text ?? "");
+
+    const cleaned = generated.trim().toLowerCase();
+    return cleaned || chars.toLowerCase();
+  } catch (err) {
+    console.warn("Autocorrect failed:", err);
+    return chars.toLowerCase();
+  }
+}
 
 export interface UseCharBufferReturn {
   rawChars: string;
@@ -50,19 +101,8 @@ export function useCharBuffer(): UseCharBufferReturn {
     setIsCorrecting(true);
 
     try {
-      const res = await fetch("/api/autocorrect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chars }),
-      });
-
-      if (res.ok) {
-        const data = (await res.json()) as { corrected: string };
-        setCorrectedText(data.corrected);
-      } else {
-        // Graceful degradation: show raw chars lowercased
-        setCorrectedText(chars.toLowerCase());
-      }
+      const corrected = await callAutocorrect(chars);
+      setCorrectedText(corrected);
     } catch {
       setCorrectedText(chars.toLowerCase());
     } finally {
@@ -79,7 +119,7 @@ export function useCharBuffer(): UseCharBufferReturn {
   }, []);
 
   const resetSilenceTimer = useCallback(
-    (chars: string) => {
+    (_chars: string) => {
       clearSilenceTimer();
       silenceTimerRef.current = setTimeout(() => {
         if (rawCharsRef.current.trim()) {
@@ -126,7 +166,6 @@ export function useCharBuffer(): UseCharBufferReturn {
     }
   }, [clearSilenceTimer, triggerAutocorrect]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       clearSilenceTimer();
