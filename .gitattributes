@@ -1,0 +1,2 @@
+client/public/word_model/weights.json filter=lfs diff=lfs merge=lfs -text
+client/public/model/weights.json filter=lfs diff=lfs merge=lfs -text
